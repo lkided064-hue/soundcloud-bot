@@ -70,18 +70,61 @@ def get_track_info(url: str) -> dict:
             'duration': 0,
         }
 
-def download_thumbnail(thumbnail_url: str) -> str:
-    """Скачать обложку трека"""
+def search_youtube_and_download(track_title: str, artist: str = "") -> tuple[bool, str]:
+    """Поискать трек на YouTube и скачать как MP3"""
     try:
-        import urllib.request
+        # Формируем поисковый запрос
+        search_query = f"{track_title} {artist}".strip()
+        logger.info(f"Ищу на YouTube: {search_query}")
         
-        thumbnail_path = os.path.join(DOWNLOAD_FOLDER, 'thumbnail.jpg')
-        urllib.request.urlretrieve(thumbnail_url, thumbnail_path)
-        logger.info(f"Обложка скачана: {thumbnail_path}")
-        return thumbnail_path
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '128',
+            }],
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
+            'quiet': False,
+            'no_warnings': False,
+            'socket_timeout': 60,
+            'http_chunk_size': 1024 * 1024,
+            'default_search': 'ytsearch',  # Поиск на YouTube
+            'noplaylist': True,  # Только одно видео
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Скачивание из YouTube: {search_query}")
+            info = ydl.extract_info(search_query, download=True)
+            
+            # Получить название скачанного файла
+            title = info.get('title', 'track')
+            logger.info(f"Найдено на YouTube: {title}")
+            
+            # Очистить имя файла
+            clean_name = clean_filename(title + '.mp3')
+            file_path = Path(DOWNLOAD_FOLDER) / clean_name
+            
+            # Проверить, существует ли файл
+            if file_path.exists():
+                file_size = file_path.stat().st_size / (1024 * 1024)
+                logger.info(f"Файл готов: {file_path} ({file_size:.1f} МБ)")
+                return True, str(file_path)
+            
+            # Если нет, поищем самый свежий файл
+            downloads_path = Path(DOWNLOAD_FOLDER)
+            mp3_files = list(downloads_path.glob('*.mp3'))
+            if mp3_files:
+                latest_file = max(mp3_files, key=lambda p: p.stat().st_mtime)
+                file_size = latest_file.stat().st_size / (1024 * 1024)
+                logger.info(f"Файл найден: {latest_file} ({file_size:.1f} МБ)")
+                return True, str(latest_file)
+            
+            return False, "Ошибка: файл не был создан"
+            
     except Exception as e:
-        logger.warning(f"Не удалось скачать обложку: {e}")
-        return None
+        logger.error(f"Ошибка при поиске на YouTube: {str(e)}", exc_info=True)
+        return False, f"Ошибка поиска: {str(e)}"
 
 # ===== ФУНКЦИИ СТАТИСТИКИ =====
 
@@ -255,18 +298,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🎵 Добро пожаловать в Music Downloader!\n\n"
         "Просто отправь мне ссылку на трек с одного из поддерживаемых сервисов, "
         "и я скачаю его для тебя.\n\n"
-        "Поддерживаемые сервисы:\n"
-        "🎵 SoundCloud\n"
-        "🎵 Spotify\n"
-        "🎵 Apple Music\n"
-        "🎵 YouTube Music\n"
-        "🎵 Яндекс Музыка\n"
-        "🎵 VK Музыка\n"
-        "🎵 Tidal\n\n"
+        "✅ Поддерживаемые сервисы:\n"
+        "🎵 SoundCloud - прямое скачивание\n"
+        "🎵 Spotify - поиск на YouTube\n"
+        "🎵 YouTube - обычный YouTube\n"
+        "🎵 Яндекс Музыка - поиск на YouTube\n"
+        "🎵 VK Музыка - прямое скачивание\n"
+        "🎵 Tidal - прямое скачивание\n\n"
         "Команды:\n"
         "/start - показать это сообщение\n"
-        "/help - справка\n"
-        "/stats - статистика (только для владельца)"
+        "/help - справка"
     )
     await update.message.reply_text(welcome_text)
 
@@ -274,27 +315,30 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Обработчик команды /help"""
     help_text = (
         "📝 Справка:\n\n"
-        "1. Скопируй ссылку на трек из любого поддерживаемого сервиса\n"
+        "1. Скопируй ссылку на трек из поддерживаемого сервиса\n"
         "2. Отправь её мне в чат\n"
         "3. Подожди, пока трек скачается\n"
         "4. Получи аудиофайл в формате MP3\n\n"
-        "✅ Поддерживаемые сервисы:\n"
+        "✅ ПОДДЕРЖИВАЕМЫЕ СЕРВИСЫ:\n\n"
         "🎵 SoundCloud\n"
+        "   Прямое скачивание, полная поддержка\n\n"
         "🎵 Spotify\n"
-        "🎵 Apple Music\n"
-        "🎵 YouTube Music\n"
+        "   Поиск трека на YouTube (обходит DRM)\n\n"
+        "🎵 YouTube\n"
+        "   Все видео с аудио\n\n"
         "🎵 Яндекс Музыка\n"
+        "   Поиск трека на YouTube\n\n"
         "🎵 VK Музыка\n"
-        "🎵 Tidal\n\n"
-        "💫 Возможности:\n"
+        "   Треки из ВКонтакте\n\n"
+        "🎵 Tidal\n"
+        "   Потоковый сервис\n\n"
+        "💫 ОСОБЕННОСТИ:\n"
         "✓ Очистка имён файлов\n"
-        "✓ Автоматическая обложка трека\n"
-        "✓ Информация об артисте\n"
-        "✓ Оптимизированный размер файла\n\n"
-        "Доступные команды:\n"
-        "/start - показать приветствие\n"
-        "/help - эта справка\n"
-        "/stats - статистика (только владельцу)"
+        "✓ Автоматическая обложка\n"
+        "✓ MP3 128 кбит/с\n\n"
+        "Команды:\n"
+        "/start - приветствие\n"
+        "/help - эта справка"
     )
     await update.message.reply_text(help_text)
 
@@ -325,9 +369,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     supported_services = {
         'soundcloud.com': '🎵 SoundCloud',
         'spotify.com': '🎵 Spotify',
-        'apple.com': '🎵 Apple Music',
-        'music.apple.com': '🎵 Apple Music',
-        'music.youtube.com': '🎵 YouTube Music',
         'youtu.be': '🎵 YouTube',
         'youtube.com': '🎵 YouTube',
         'music.yandex.ru': '🎵 Яндекс Музыка',
@@ -345,7 +386,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             break
     
     if not service_found:
-        available = "🎵 SoundCloud\n🎵 Spotify\n🎵 Apple Music\n🎵 YouTube Music\n🎵 Яндекс Музыка\n🎵 VK Музыка\n🎵 Tidal"
+        available = "🎵 SoundCloud\n🎵 Spotify\n🎵 YouTube\n🎵 Яндекс Музыка\n🎵 VK Музыка\n🎵 Tidal"
         await update.message.reply_text(
             f"❌ Этот сервис пока не поддерживается.\n\n"
             f"Поддерживаемые сервисы:\n{available}"
@@ -354,6 +395,111 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     # Обновить статистику
     update_user_stats(user_id, username, first_name)
+    
+    # СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ SPOTIFY
+    if 'spotify.com' in url.lower():
+        loading_msg = await update.message.reply_text("⏳ Ищу трек на YouTube (Spotify требует поиск)...")
+        try:
+            # Получить информацию о треке из Spotify URL
+            track_info = await asyncio.to_thread(get_track_info, url)
+            track_title = track_info.get('title', '')
+            artist = track_info.get('artist', '')
+            
+            if not track_title:
+                # Если не получилось получить инфо, просто скажем пользователю
+                await loading_msg.delete()
+                await update.message.reply_text("❌ Не удалось получить информацию о треке Spotify.\n\nПопробуй скопировать название и артиста и отправь как текст.")
+                return
+            
+            logger.info(f"Spotify трек: {track_title} - {artist}")
+            
+            # Скачать с YouTube
+            success, result = await asyncio.to_thread(search_youtube_and_download, track_title, artist)
+            
+            if success:
+                file_path = Path(result)
+                if file_path.exists():
+                    try:
+                        with open(file_path, 'rb') as audio_file:
+                            await update.message.reply_audio(
+                                audio_file,
+                                title=track_title,
+                                performer=artist,
+                                caption=f"✅ Найдено на YouTube\n{track_title}",
+                                connect_timeout=60,
+                                read_timeout=300,
+                                write_timeout=300
+                            )
+                        logger.info(f"Spotify трек отправлен: {file_path.name}")
+                        file_path.unlink()
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки: {e}")
+                        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            else:
+                await update.message.reply_text(f"❌ {result}")
+        
+        except Exception as e:
+            logger.error(f"Ошибка Spotify: {str(e)}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            try:
+                await loading_msg.delete()
+            except:
+                pass
+        return
+    
+    # СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ ЯНДЕКС МУЗЫКИ
+    if 'yandex' in url.lower() and 'music' in url.lower():
+        loading_msg = await update.message.reply_text("⏳ Ищу трек на YouTube (Яндекс требует поиск)...")
+        try:
+            # Получить информацию о треке из Яндекс Музыки URL
+            track_info = await asyncio.to_thread(get_track_info, url)
+            track_title = track_info.get('title', '')
+            artist = track_info.get('artist', '')
+            
+            if not track_title:
+                await loading_msg.delete()
+                await update.message.reply_text("❌ Не удалось получить информацию о треке Яндекс Музыки.\n\nПопробуй скопировать название и артиста.")
+                return
+            
+            logger.info(f"Яндекс трек: {track_title} - {artist}")
+            
+            # Скачать с YouTube
+            success, result = await asyncio.to_thread(search_youtube_and_download, track_title, artist)
+            
+            if success:
+                file_path = Path(result)
+                if file_path.exists():
+                    try:
+                        with open(file_path, 'rb') as audio_file:
+                            await update.message.reply_audio(
+                                audio_file,
+                                title=track_title,
+                                performer=artist,
+                                caption=f"✅ Найдено на YouTube\n{track_title}",
+                                connect_timeout=60,
+                                read_timeout=300,
+                                write_timeout=300
+                            )
+                        logger.info(f"Яндекс трек отправлен: {file_path.name}")
+                        file_path.unlink()
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки: {e}")
+                        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            else:
+                await update.message.reply_text(f"❌ {result}")
+        
+        except Exception as e:
+            logger.error(f"Ошибка Яндекс: {str(e)}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        finally:
+            try:
+                await loading_msg.delete()
+            except:
+                pass
+        return
+    
+    # ОБЫЧНАЯ ОБРАБОТКА (SoundCloud, YouTube, VK, Tidal)
     
     # Отправить статус "загружает видео"
     try:
