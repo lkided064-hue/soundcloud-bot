@@ -10,30 +10,34 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatAction
 
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Папка для сохранения музыки
 DOWNLOAD_FOLDER = "downloads"
 Path(DOWNLOAD_FOLDER).mkdir(exist_ok=True)
 
+# Файл для статистики
 STATS_FILE = "bot_stats.json"
 
 def clean_filename(filename: str) -> str:
-    """Очистить имя файла"""
+    """Очистить имя файла от спецсимволов и лишних пробелов"""
     name, ext = os.path.splitext(filename)
+    
     name = re.sub(r'\s+', '_', name)
     name = re.sub(r'[^\w\-]', '', name)
     name = re.sub(r'_+', '_', name)
     name = name.strip('_')
+    
     return name + ext
 
-def download_music(url: str) -> tuple[bool, str]:
-    """Скачать трек"""
+def download_soundcloud(url: str) -> tuple[bool, str]:
+    """Скачать трек с SoundCloud"""
     try:
-        logger.info(f"Скачивание: {url}")
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -48,73 +52,26 @@ def download_music(url: str) -> tuple[bool, str]:
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Скачивание: {url}")
             info = ydl.extract_info(url, download=True)
-            title = info.get('title', 'track')
             
-            # Ищем самый свежий MP3 файл
-            downloads_path = Path(DOWNLOAD_FOLDER)
-            mp3_files = list(downloads_path.glob('*.mp3'))
-            
+            # Ищем MP3 файлы в папке
+            mp3_files = list(Path(DOWNLOAD_FOLDER).glob('*.mp3'))
             if mp3_files:
+                # Берём самый свежий файл
                 latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
                 clean_name = clean_filename(latest.name)
-                new_path = downloads_path / clean_name
+                new_path = Path(DOWNLOAD_FOLDER) / clean_name
                 
                 if latest != new_path:
                     latest.rename(new_path)
-                    return True, str(new_path)
                 
-                return True, str(latest)
+                return True, str(new_path)
             
-            logger.error("MP3 файл не найден")
-            return False, "MP3 файл не был создан"
+            return False, "MP3 файл не найден"
             
     except Exception as e:
-        logger.error(f"Ошибка: {str(e)}")
-        return False, f"Ошибка: {str(e)}"
-
-def search_music(query: str) -> tuple[bool, str]:
-    """Поиск музыки на YouTube"""
-    try:
-        logger.info(f"Поиск: {query}")
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
-            'default_search': 'ytsearch',
-            'noplaylist': True,
-            'quiet': False,
-            'no_warnings': False,
-            'keepvideo': False,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
-            
-            # Ищем самый свежий MP3 файл
-            downloads_path = Path(DOWNLOAD_FOLDER)
-            mp3_files = list(downloads_path.glob('*.mp3'))
-            
-            if mp3_files:
-                latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
-                clean_name = clean_filename(latest.name)
-                new_path = downloads_path / clean_name
-                
-                if latest != new_path:
-                    latest.rename(new_path)
-                    return True, str(new_path)
-                
-                return True, str(latest)
-            
-            logger.error("MP3 файл не найден")
-            return False, "MP3 файл не был создан"
-            
-    except Exception as e:
-        logger.error(f"Ошибка поиска: {str(e)}")
+        logger.error(f"Ошибка при скачивании: {str(e)}")
         return False, f"Ошибка: {str(e)}"
 
 # ===== СТАТИСТИКА =====
@@ -153,8 +110,8 @@ def update_user_stats(user_id: int, username: str) -> None:
         stats['total_downloads'] += 1
         
         save_stats(stats)
-    except Exception as e:
-        logger.warning(f"Ошибка статистики: {e}")
+    except:
+        pass
 
 def get_stats_text() -> str:
     """Получить текст статистики"""
@@ -173,45 +130,34 @@ def get_stats_text() -> str:
 # ===== КОМАНДЫ =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /start"""
+    """Обработчик команды /start"""
     welcome_text = (
-        "🎵 Добро пожаловать в Music Downloader!\n\n"
-        "Отправь ссылку на трек:\n"
-        "🎵 SoundCloud\n"
-        "🎵 Spotify\n"
-        "🎵 YouTube\n"
-        "🎵 Яндекс Музыка\n"
-        "🎵 VK Музыка\n"
-        "🎵 Tidal\n\n"
+        "🎵 Добро пожаловать в SoundCloud Music Downloader!\n\n"
+        "Просто отправь мне ссылку на трек с SoundCloud, и я скачаю его для тебя.\n\n"
         "Команды:\n"
-        "/start - это сообщение\n"
-        "/help - справка"
+        "/start - показать это сообщение\n"
+        "/help - справка\n\n"
+        "Пример: https://soundcloud.com/artist/track-name"
     )
     await update.message.reply_text(welcome_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /help"""
+    """Обработчик команды /help"""
     help_text = (
         "📝 Справка:\n\n"
-        "1. Скопируй ссылку на трек\n"
-        "2. Отправь в чат\n"
-        "3. Получи MP3 файл\n\n"
-        "✅ Поддерживаемые сервисы:\n"
-        "🎵 SoundCloud\n"
-        "🎵 Spotify\n"
-        "🎵 YouTube\n"
-        "🎵 Яндекс Музыка\n"
-        "🎵 VK Музыка\n"
-        "🎵 Tidal\n\n"
-        "💫 Файл будет очищен:\n"
-        "✓ Пробелы → подчёркивание\n"
-        "✓ Спецсимволы удалены\n"
-        "✓ MP3 192 кбит/с"
+        "1. Скопируй ссылку на трек из SoundCloud\n"
+        "2. Отправь её мне в чат\n"
+        "3. Подожди, пока трек скачается\n"
+        "4. Получи аудиофайл в формате MP3\n\n"
+        "Имя файла будет очищено:\n"
+        "- Пробелы заменены на подчёркивание\n"
+        "- Удалены спецсимволы\n"
+        "- Оставлены только буквы, цифры и дефис"
     )
     await update.message.reply_text(help_text)
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /stats - только для владельца"""
+    """Обработчик команды /stats - только для владельца"""
     owner_id = os.getenv("OWNER_ID")
     user_id = str(update.effective_user.id)
     
@@ -222,7 +168,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(get_stats_text())
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик ссылок"""
+    """Обработчик ссылок на SoundCloud"""
     url = update.message.text.strip()
     user_id = update.effective_user.id
     username = update.effective_user.username or ""
@@ -230,29 +176,25 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Обновить статистику
     update_user_stats(user_id, username)
     
-    # Проверка сервиса
-    supported = ['soundcloud.com', 'spotify.com', 'youtube.com', 'youtu.be', 'yandex', 'vk.com', 'vkontakte.ru', 'tidal.com']
-    
-    if not any(s in url.lower() for s in supported):
-        await update.message.reply_text("❌ Сервис не поддерживается")
+    # Проверка, что это ссылка на SoundCloud
+    if "soundcloud.com" not in url:
+        await update.message.reply_text("❌ Это не ссылка на SoundCloud.\nПожалуйста, отправь ссылку на трек с SoundCloud.")
         return
     
-    # Статус
+    # Отправить статус
     try:
         await update.message.chat.send_action(ChatAction.UPLOAD_VIDEO)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Не удалось отправить статус действия: {e}")
     
-    loading_msg = await update.message.reply_text("⏳ Ищу трек...")
+    loading_msg = await update.message.reply_text("⏳ Скачиваю трек...")
     
     try:
-        # Spotify и Яндекс - ищем на YouTube
-        if 'spotify.com' in url.lower() or 'yandex' in url.lower():
-            success, result = await asyncio.to_thread(search_music, url)
-        else:
-            success, result = await asyncio.to_thread(download_music, url)
+        # Скачать в отдельном потоке
+        success, result = await asyncio.to_thread(download_soundcloud, url)
         
         if success:
+            # Отправить файл
             file_path = Path(result)
             if file_path.exists():
                 try:
@@ -261,37 +203,40 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             audio_file,
                             caption=f"✅ {file_path.stem}"
                         )
-                    logger.info(f"Отправлено: {file_path.name}")
+                    logger.info(f"Файл отправлен: {file_path.name}")
                     
+                    # Удалить локальный файл после отправки
                     try:
                         file_path.unlink()
-                    except:
-                        pass
+                        logger.info(f"Локальный файл удалён: {file_path.name}")
+                    except Exception as e:
+                        logger.warning(f"Не удалось удалить файл: {e}")
                         
                 except Exception as e:
-                    logger.error(f"Ошибка отправки: {e}")
-                    await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+                    logger.error(f"Ошибка при отправке файла: {e}")
+                    await update.message.reply_text(f"❌ Ошибка при отправке файла: {str(e)}")
             else:
-                await update.message.reply_text("❌ Файл не найден")
+                await update.message.reply_text("❌ Файл не найден после скачивания.")
         else:
             await update.message.reply_text(f"❌ {result}")
     
     except Exception as e:
         logger.error(f"Ошибка: {str(e)}")
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
     
     finally:
+        # Удалить сообщение о загрузке
         try:
             await loading_msg.delete()
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Не удалось удалить сообщение о загрузке: {e}")
 
 def main():
-    """Главная функция"""
+    """Главная функция бота"""
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
     
     if TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("❌ Установи TELEGRAM_BOT_TOKEN")
+        logger.error("❌ Установи переменную окружения TELEGRAM_BOT_TOKEN")
         return
     
     application = Application.builder().token(TOKEN).build()
