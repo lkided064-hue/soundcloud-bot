@@ -41,24 +41,33 @@ def download_music(url: str) -> tuple[bool, str]:
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
             'quiet': False,
             'no_warnings': False,
+            'keepvideo': False,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            original_filename = ydl.prepare_filename(info)
+            title = info.get('title', 'track')
             
-            original_path = Path(original_filename)
-            clean_name = clean_filename(original_path.name)
-            new_path = original_path.parent / clean_name
+            # Ищем самый свежий MP3 файл
+            downloads_path = Path(DOWNLOAD_FOLDER)
+            mp3_files = list(downloads_path.glob('*.mp3'))
             
-            if original_path.exists() and original_path != new_path:
-                original_path.rename(new_path)
-                return True, str(new_path)
+            if mp3_files:
+                latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
+                clean_name = clean_filename(latest.name)
+                new_path = downloads_path / clean_name
+                
+                if latest != new_path:
+                    latest.rename(new_path)
+                    return True, str(new_path)
+                
+                return True, str(latest)
             
-            return True, original_filename
+            logger.error("MP3 файл не найден")
+            return False, "MP3 файл не был создан"
             
     except Exception as e:
         logger.error(f"Ошибка: {str(e)}")
@@ -75,26 +84,34 @@ def search_music(query: str) -> tuple[bool, str]:
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
             'default_search': 'ytsearch',
             'noplaylist': True,
             'quiet': False,
             'no_warnings': False,
+            'keepvideo': False,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=True)
-            original_filename = ydl.prepare_filename(info)
             
-            original_path = Path(original_filename)
-            clean_name = clean_filename(original_path.name)
-            new_path = original_path.parent / clean_name
+            # Ищем самый свежий MP3 файл
+            downloads_path = Path(DOWNLOAD_FOLDER)
+            mp3_files = list(downloads_path.glob('*.mp3'))
             
-            if original_path.exists() and original_path != new_path:
-                original_path.rename(new_path)
-                return True, str(new_path)
+            if mp3_files:
+                latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
+                clean_name = clean_filename(latest.name)
+                new_path = downloads_path / clean_name
+                
+                if latest != new_path:
+                    latest.rename(new_path)
+                    return True, str(new_path)
+                
+                return True, str(latest)
             
-            return True, original_filename
+            logger.error("MP3 файл не найден")
+            return False, "MP3 файл не был создан"
             
     except Exception as e:
         logger.error(f"Ошибка поиска: {str(e)}")
