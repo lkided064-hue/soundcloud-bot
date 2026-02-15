@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from datetime import datetime
 import yt_dlp
-import urllib.request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatAction
@@ -19,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 DOWNLOAD_FOLDER = "downloads"
 Path(DOWNLOAD_FOLDER).mkdir(exist_ok=True)
+
 STATS_FILE = "bot_stats.json"
 
 def clean_filename(filename: str) -> str:
@@ -27,99 +27,83 @@ def clean_filename(filename: str) -> str:
     name = re.sub(r'\s+', '_', name)
     name = re.sub(r'[^\w\-]', '', name)
     name = re.sub(r'_+', '_', name)
-    return name.strip('_') + ext
-
-def download_thumbnail(thumb_url: str) -> str:
-    """Скачать обложку"""
-    if not thumb_url:
-        return None
-    try:
-        thumb_path = os.path.join(DOWNLOAD_FOLDER, 'thumb.jpg')
-        urllib.request.urlretrieve(thumb_url, thumb_path)
-        logger.info(f"Обложка: {thumb_path}")
-        return thumb_path
-    except Exception as e:
-        logger.warning(f"Обложка ошибка: {e}")
-        return None
-
-def get_track_info(url: str) -> dict:
-    """Получить инфо о треке"""
-    try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return {
-                'title': info.get('title', ''),
-                'artist': info.get('uploader', ''),
-                'thumbnail': info.get('thumbnail', ''),
-            }
-    except:
-        return {'title': '', 'artist': '', 'thumbnail': ''}
+    name = name.strip('_')
+    return name + ext
 
 def download_music(url: str) -> tuple[bool, str]:
-    """Скачать музыку"""
+    """Скачать трек"""
     try:
-        logger.info(f"Скачиваю: {url}")
+        logger.info(f"Скачивание: {url}")
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '128',
+                'preferredquality': '192',
             }],
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
             'quiet': False,
             'no_warnings': False,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            original_filename = ydl.prepare_filename(info)
             
-            # Поищем файл
-            mp3_files = list(Path(DOWNLOAD_FOLDER).glob('*.mp3'))
-            if mp3_files:
-                latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
-                logger.info(f"Файл: {latest}")
-                return True, str(latest)
+            original_path = Path(original_filename)
+            clean_name = clean_filename(original_path.name)
+            new_path = original_path.parent / clean_name
             
-            return False, "Файл не найден"
+            if original_path.exists() and original_path != new_path:
+                original_path.rename(new_path)
+                return True, str(new_path)
+            
+            return True, original_filename
+            
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        return False, str(e)
+        logger.error(f"Ошибка: {str(e)}")
+        return False, f"Ошибка: {str(e)}"
 
 def search_music(query: str) -> tuple[bool, str]:
-    """Поиск музыки"""
+    """Поиск музыки на YouTube"""
     try:
-        logger.info(f"Ищу: {query}")
+        logger.info(f"Поиск: {query}")
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '128',
+                'preferredquality': '192',
             }],
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s'),
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
             'default_search': 'ytsearch',
             'noplaylist': True,
             'quiet': False,
+            'no_warnings': False,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=True)
+            original_filename = ydl.prepare_filename(info)
             
-            mp3_files = list(Path(DOWNLOAD_FOLDER).glob('*.mp3'))
-            if mp3_files:
-                latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
-                logger.info(f"Найдено: {latest}")
-                return True, str(latest)
+            original_path = Path(original_filename)
+            clean_name = clean_filename(original_path.name)
+            new_path = original_path.parent / clean_name
             
-            return False, "Не найдено"
+            if original_path.exists() and original_path != new_path:
+                original_path.rename(new_path)
+                return True, str(new_path)
+            
+            return True, original_filename
+            
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        return False, str(e)
+        logger.error(f"Ошибка поиска: {str(e)}")
+        return False, f"Ошибка: {str(e)}"
 
 # ===== СТАТИСТИКА =====
 
 def load_stats() -> dict:
+    """Загрузить статистику"""
     try:
         if Path(STATS_FILE).exists():
             with open(STATS_FILE, 'r', encoding='utf-8') as f:
@@ -128,151 +112,155 @@ def load_stats() -> dict:
         pass
     return {'total_downloads': 0, 'total_users': 0, 'users': {}}
 
-def save_stats(stats):
+def save_stats(stats: dict) -> None:
+    """Сохранить статистику"""
     try:
         with open(STATS_FILE, 'w', encoding='utf-8') as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
     except:
         pass
 
-def update_user_stats(user_id, username, first_name):
-    stats = load_stats()
-    if str(user_id) not in stats['users']:
-        stats['total_users'] += 1
-        stats['users'][str(user_id)] = {
-            'username': username or 'user',
-            'downloads': 0,
-        }
-    stats['users'][str(user_id)]['downloads'] += 1
-    stats['total_downloads'] += 1
-    save_stats(stats)
+def update_user_stats(user_id: int, username: str) -> None:
+    """Обновить статистику"""
+    try:
+        stats = load_stats()
+        
+        if str(user_id) not in stats['users']:
+            stats['total_users'] += 1
+            stats['users'][str(user_id)] = {
+                'username': username or 'user',
+                'downloads': 0,
+            }
+        
+        stats['users'][str(user_id)]['downloads'] += 1
+        stats['total_downloads'] += 1
+        
+        save_stats(stats)
+    except Exception as e:
+        logger.warning(f"Ошибка статистики: {e}")
 
 def get_stats_text() -> str:
-    stats = load_stats()
-    users_list = stats.get('users', {})
-    top = sorted(users_list.items(), key=lambda x: x[1].get('downloads', 0), reverse=True)[:5]
-    
-    text = f"📊 СТАТИСТИКА\n🔢 Скачиваний: {stats.get('total_downloads', 0)}\n👥 Пользователей: {stats.get('total_users', 0)}\n\n🏆 ТОП:\n"
-    for i, (_, data) in enumerate(top, 1):
-        text += f"{i}. @{data.get('username')} - {data.get('downloads')} 🎵\n"
-    return text
+    """Получить текст статистики"""
+    try:
+        stats = load_stats()
+        users = stats.get('users', {})
+        top = sorted(users.items(), key=lambda x: x[1].get('downloads', 0), reverse=True)[:5]
+        
+        text = f"📊 СТАТИСТИКА\n🔢 Скачиваний: {stats.get('total_downloads', 0)}\n👥 Пользователей: {stats.get('total_users', 0)}\n\n🏆 ТОП:\n"
+        for i, (_, data) in enumerate(top, 1):
+            text += f"{i}. @{data.get('username')} - {data.get('downloads')} 🎵\n"
+        return text
+    except:
+        return "❌ Ошибка статистики"
 
 # ===== КОМАНДЫ =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = "🎵 Music Downloader\n\nОтправь ссылку на трек:\n🎵 SoundCloud\n🎵 Spotify\n🎵 YouTube\n🎵 Яндекс Музыка\n🎵 VK\n🎵 Tidal\n\n/help - справка"
-    await update.message.reply_text(text)
+    """Команда /start"""
+    welcome_text = (
+        "🎵 Добро пожаловать в Music Downloader!\n\n"
+        "Отправь ссылку на трек:\n"
+        "🎵 SoundCloud\n"
+        "🎵 Spotify\n"
+        "🎵 YouTube\n"
+        "🎵 Яндекс Музыка\n"
+        "🎵 VK Музыка\n"
+        "🎵 Tidal\n\n"
+        "Команды:\n"
+        "/start - это сообщение\n"
+        "/help - справка"
+    )
+    await update.message.reply_text(welcome_text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = "📝 Как использовать:\n1️⃣ Скопируй ссылку на трек\n2️⃣ Отправь в чат\n3️⃣ Получи MP3 файл\n\n✅ Поддержка:\n🎵 SoundCloud\n🎵 Spotify\n🎵 YouTube\n🎵 Яндекс Музыка\n🎵 VK Музыка\n🎵 Tidal"
-    await update.message.reply_text(text)
+    """Команда /help"""
+    help_text = (
+        "📝 Справка:\n\n"
+        "1. Скопируй ссылку на трек\n"
+        "2. Отправь в чат\n"
+        "3. Получи MP3 файл\n\n"
+        "✅ Поддерживаемые сервисы:\n"
+        "🎵 SoundCloud\n"
+        "🎵 Spotify\n"
+        "🎵 YouTube\n"
+        "🎵 Яндекс Музыка\n"
+        "🎵 VK Музыка\n"
+        "🎵 Tidal\n\n"
+        "💫 Файл будет очищен:\n"
+        "✓ Пробелы → подчёркивание\n"
+        "✓ Спецсимволы удалены\n"
+        "✓ MP3 192 кбит/с"
+    )
+    await update.message.reply_text(help_text)
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /stats - только для владельца"""
     owner_id = os.getenv("OWNER_ID")
-    if owner_id and str(update.effective_user.id) != owner_id:
-        await update.message.reply_text("❌ Только для владельца")
+    user_id = str(update.effective_user.id)
+    
+    if not owner_id or user_id != owner_id:
+        await update.message.reply_text("❌ У тебя нет доступа")
         return
+    
     await update.message.reply_text(get_stats_text())
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик ссылок"""
     url = update.message.text.strip()
     user_id = update.effective_user.id
     username = update.effective_user.username or ""
-    first_name = update.effective_user.first_name or ""
     
-    update_user_stats(user_id, username, first_name)
+    # Обновить статистику
+    update_user_stats(user_id, username)
     
-    supported = ['soundcloud.com', 'youtube.com', 'youtu.be', 'vk.com', 'vkontakte.ru', 'tidal.com', 'spotify.com', 'yandex.ru', 'music.yandex']
+    # Проверка сервиса
+    supported = ['soundcloud.com', 'spotify.com', 'youtube.com', 'youtu.be', 'yandex', 'vk.com', 'vkontakte.ru', 'tidal.com']
     
     if not any(s in url.lower() for s in supported):
-        await update.message.reply_text("❌ Ссылка не поддерживается\n\nПоддерживаемые: SoundCloud, Spotify, YouTube, Яндекс, VK, Tidal")
+        await update.message.reply_text("❌ Сервис не поддерживается")
         return
+    
+    # Статус
+    try:
+        await update.message.chat.send_action(ChatAction.UPLOAD_VIDEO)
+    except:
+        pass
     
     loading_msg = await update.message.reply_text("⏳ Ищу трек...")
     
     try:
-        # SPOTIFY
-        if 'spotify.com' in url.lower():
-            try:
-                info = await asyncio.to_thread(get_track_info, url)
-                title = info.get('title', '')
-                artist = info.get('artist', '')
-                
-                if not title:
-                    await loading_msg.edit_text("❌ Не удалось получить информацию")
-                    return
-                
-                search_query = f"{title} {artist}".strip()
-                success, result = await asyncio.to_thread(search_music, search_query)
-            except:
-                success, result = await asyncio.to_thread(search_music, url)
-        
-        # ЯНДЕКС МУЗЫКА
-        elif 'yandex' in url.lower():
-            try:
-                info = await asyncio.to_thread(get_track_info, url)
-                title = info.get('title', '')
-                artist = info.get('artist', '')
-                
-                if not title:
-                    await loading_msg.edit_text("❌ Не удалось получить информацию")
-                    return
-                
-                search_query = f"{title} {artist}".strip()
-                success, result = await asyncio.to_thread(search_music, search_query)
-            except:
-                success, result = await asyncio.to_thread(search_music, url)
-        
-        # ОСТАЛЬНЫЕ СЕРВИСЫ
+        # Spotify и Яндекс - ищем на YouTube
+        if 'spotify.com' in url.lower() or 'yandex' in url.lower():
+            success, result = await asyncio.to_thread(search_music, url)
         else:
             success, result = await asyncio.to_thread(download_music, url)
         
-        if not success:
-            await loading_msg.edit_text(f"❌ Ошибка: {result}")
-            return
-        
-        # ОТПРАВКА ФАЙЛА
-        file_path = Path(result)
-        if not file_path.exists():
-            await loading_msg.edit_text("❌ Файл не найден")
-            return
-        
-        file_size = file_path.stat().st_size / (1024 * 1024)
-        logger.info(f"Отправляю: {file_path} ({file_size:.1f} МБ)")
-        
-        # Получить инфо и обложку
-        track_info = await asyncio.to_thread(get_track_info, url)
-        title = track_info.get('title', file_path.stem)
-        artist = track_info.get('artist', '')
-        thumbnail = None
-        
-        if track_info.get('thumbnail'):
-            thumbnail = await asyncio.to_thread(download_thumbnail, track_info['thumbnail'])
-        
-        # Отправить
-        try:
-            with open(file_path, 'rb') as audio_file:
-                await update.message.reply_audio(
-                    audio_file,
-                    title=title,
-                    performer=artist,
-                    thumbnail=thumbnail,
-                    connect_timeout=60,
-                    read_timeout=300,
-                    write_timeout=300
-                )
-            logger.info(f"✅ Отправлено: {file_path.name}")
-            file_path.unlink()
-            
-            if thumbnail and Path(thumbnail).exists():
-                Path(thumbnail).unlink()
-        
-        except Exception as e:
-            logger.error(f"Ошибка отправки: {e}")
-            await update.message.reply_text(f"❌ Ошибка отправки: {str(e)}")
+        if success:
+            file_path = Path(result)
+            if file_path.exists():
+                try:
+                    with open(file_path, 'rb') as audio_file:
+                        await update.message.reply_audio(
+                            audio_file,
+                            caption=f"✅ {file_path.stem}"
+                        )
+                    logger.info(f"Отправлено: {file_path.name}")
+                    
+                    try:
+                        file_path.unlink()
+                    except:
+                        pass
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка отправки: {e}")
+                    await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            else:
+                await update.message.reply_text("❌ Файл не найден")
+        else:
+            await update.message.reply_text(f"❌ {result}")
     
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка: {str(e)}")
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
     
     finally:
@@ -282,6 +270,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             pass
 
 def main():
+    """Главная функция"""
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
     
     if TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -296,6 +285,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
     
     logger.info("🤖 Бот запущен!")
+    
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
