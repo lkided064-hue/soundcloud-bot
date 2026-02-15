@@ -4,7 +4,7 @@ import re
 import asyncio
 import json
 from pathlib import Path
-from datetime import datetime
+import urllib.request
 import yt_dlp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -21,16 +21,7 @@ Path(DOWNLOAD_FOLDER).mkdir(exist_ok=True)
 
 STATS_FILE = "bot_stats.json"
 
-def clean_filename(filename: str) -> str:
-    """Очистить имя файла"""
-    name, ext = os.path.splitext(filename)
-    name = re.sub(r'\s+', '_', name)
-    name = re.sub(r'[^\w\-]', '', name)
-    name = re.sub(r'_+', '_', name)
-    name = name.strip('_')
-    return name + ext
-
-def download_soundcloud(url: str) -> tuple[bool, str]:
+def download_soundcloud(url: str) -> tuple[bool, str, dict]:
     """Скачать трек с SoundCloud"""
     try:
         logger.info(f"Скачивание: {url}")
@@ -49,24 +40,38 @@ def download_soundcloud(url: str) -> tuple[bool, str]:
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            title = info.get('title', '')
+            artist = info.get('uploader', '')
+            thumbnail = info.get('thumbnail', '')
             
-            # Ищем MP3 файлы в папке
+            # Ищем MP3 файлы
             mp3_files = list(Path(DOWNLOAD_FOLDER).glob('*.mp3'))
             if mp3_files:
                 latest = max(mp3_files, key=lambda p: p.stat().st_mtime)
-                clean_name = clean_filename(latest.name)
-                new_path = Path(DOWNLOAD_FOLDER) / clean_name
-                
-                if latest != new_path:
-                    latest.rename(new_path)
-                
-                return True, str(new_path)
+                return True, str(latest), {
+                    'title': title,
+                    'artist': artist,
+                    'thumbnail': thumbnail,
+                }
             
-            return False, "MP3 файл не найден"
+            return False, "MP3 файл не найден", {}
             
     except Exception as e:
         logger.error(f"Ошибка: {str(e)}")
-        return False, f"Ошибка: {str(e)}"
+        return False, f"Ошибка: {str(e)}", {}
+
+def download_thumbnail(thumb_url: str) -> str:
+    """Скачать обложку"""
+    if not thumb_url:
+        return None
+    try:
+        thumb_path = os.path.join(DOWNLOAD_FOLDER, 'thumbnail.jpg')
+        urllib.request.urlretrieve(thumb_url, thumb_path)
+        logger.info(f"Обложка: {thumb_path}")
+        return thumb_path
+    except Exception as e:
+        logger.warning(f"Ошибка обложки: {e}")
+        return None
 
 # ===== СТАТИСТИКА =====
 
@@ -185,24 +190,42 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     try:
         # Скачать
-        success, result = await asyncio.to_thread(download_soundcloud, url)
+        success, result, info = await asyncio.to_thread(download_soundcloud, url)
         
         if success:
             file_path = Path(result)
             if file_path.exists():
                 try:
+                    # Получить чистый текст (без подчёркиваний)
+                    clean_title = file_path.stem.replace('_', ' ')
+                    artist = info.get('artist', '')
+                    thumbnail = None
+                    
+                    # Скачать обложку если есть
+                    if info.get('thumbnail'):
+                        thumbnail = await asyncio.to_thread(download_thumbnail, info['thumbnail'])
+                    
                     with open(file_path, 'rb') as audio_file:
                         await update.message.reply_audio(
                             audio_file,
-                            caption=f"✅ {file_path.stem}"
+                            title=clean_title,
+                            performer=artist,
+                            thumbnail=thumbnail,
+                            caption=f"✅ {clean_title}"
                         )
                     logger.info(f"Файл отправлен: {file_path.name}")
                     
+                    # Удалить файлы
                     try:
                         file_path.unlink()
-                        logger.info(f"Файл удалён: {file_path.name}")
                     except:
                         pass
+                    
+                    if thumbnail:
+                        try:
+                            Path(thumbnail).unlink()
+                        except:
+                            pass
                         
                 except Exception as e:
                     logger.error(f"Ошибка отправки: {e}")
